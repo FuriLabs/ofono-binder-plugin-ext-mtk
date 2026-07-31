@@ -1041,7 +1041,7 @@ mtk_radio_ext_request_alloc(
     req->radio = self;
     req->response_code = resp;
     req->handle_response = handler;
-    req->id = mtk_radio_ext_new_req_id(self);
+    req->id = mtk_radio_ext_new_req_id();
     req->free = mtk_radio_ext_request_default_free;
     req->destroy = destroy;
     req->user_data = user_data;
