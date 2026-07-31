@@ -35,6 +35,8 @@
 #include <gutil_macros.h>
 #include <gutil_misc.h>
 
+typedef struct mtk_ims_call_result_request MtkImsCallResultRequest;
+
 typedef GObjectClass MtkImsCallClass;
 typedef struct mtk_ims_call {
     GObject parent;
@@ -43,6 +45,8 @@ typedef struct mtk_ims_call {
     RadioClient* ims_aosp_client;
     GPtrArray* calls;
     GHashTable* id_map;
+    MtkImsCallResultRequest* hangup_req;
+    guint hangup_radio_req_id;
 } MtkImsCall;
 
 static
@@ -61,7 +65,7 @@ G_IMPLEMENT_INTERFACE(BINDER_EXT_TYPE_CALL, mtk_ims_call_iface_init))
 #define ID_KEY(id) GUINT_TO_POINTER(id)
 #define ID_VALUE(id) GUINT_TO_POINTER(id)
 
-typedef struct mtk_ims_call_result_request {
+struct mtk_ims_call_result_request {
     int ref_count;
     guint id;
     guint id_mapped;
@@ -70,7 +74,7 @@ typedef struct mtk_ims_call_result_request {
     BinderExtCallResultFunc complete;
     GDestroyNotify destroy;
     void* user_data;
-} MtkImsCallResultRequest;
+};
 
 enum mtk_ims_call_signal {
     SIGNAL_CALL_STATE_CHANGED,
@@ -134,6 +138,36 @@ mtk_ims_call_result_request_unref(
     } else {
         return FALSE;
     }
+}
+
+static
+void
+mtk_ims_call_complete_hangup(
+    MtkImsCall* self,
+    BINDER_EXT_CALL_RESULT result)
+{
+    MtkImsCallResultRequest* req = self->hangup_req;
+    guint radio_req_id = self->hangup_radio_req_id;
+
+    if (!req) {
+        return;
+    }
+
+    DBG("complete_hangup: req=%p result=%d",
+        self->hangup_req, result);
+
+    self->hangup_req = NULL;
+    self->hangup_radio_req_id = 0;
+
+    if (radio_req_id) {
+        mtk_radio_ext_cancel(self->radio_ext, radio_req_id);
+    }
+
+    if (req->complete) {
+        req->complete(req->ext, result, req->user_data);
+    }
+
+    mtk_ims_call_result_request_unref(req);
 }
 
 static
@@ -240,24 +274,38 @@ mtk_ims_call_handle_call_info(
     for (int i = 0; i < self->calls->len; i++) {
         BinderExtCallInfo* info =
             (BinderExtCallInfo*) g_ptr_array_index(self->calls, i);
+
         if (info->call_id == call_id) {
             call = info;
             break;
         }
     }
+
     if (!call) {
         call = mtk_ims_call_info_new(call_id, call_mode, number);
         g_ptr_array_add(self->calls, call);
     }
-    call->state = mtk_ims_call_msg_type_to_state(msg_type);
+
+    call->state = state;
 
     if (msg_type == CALL_INFO_MSG_TYPE_DISCONNECTED) {
-        g_signal_emit(THIS(user_data),
+        DBG("call %u disconnected", call_id);
+
+        g_signal_emit(self,
                       mtk_ims_call_signals[SIGNAL_CALL_DISCONNECTED], 0, call_id, "");
+
         g_ptr_array_remove(self->calls, call);
+
+        DBG("remaining calls %u", self->calls->len);
+        DBG("pending hangup req %p", self->hangup_req);
+
+        if (self->hangup_req && !self->calls->len) {
+            mtk_ims_call_complete_hangup(
+                self, BINDER_EXT_CALL_RESULT_OK);
+        }
     }
 
-    g_signal_emit(THIS(user_data),
+    g_signal_emit(self,
                   mtk_ims_call_signals[SIGNAL_CALL_STATE_CHANGED], 0);
 }
 
@@ -374,10 +422,33 @@ mtk_ims_call_hangup(
     void* user_data)
 {
     MtkImsCall* self = THIS(ext);
-    mtk_radio_ext_hangup_all(self->radio_ext,
-        NULL, NULL, NULL);
+    MtkImsCallResultRequest* req;
+    guint request_id;
 
-    return 0;
+    req = mtk_ims_call_result_request_new(
+        ext, complete, destroy, user_data);
+
+    if (self->hangup_req) {
+        mtk_ims_call_complete_hangup(
+            self, BINDER_EXT_CALL_RESULT_ERROR);
+    }
+
+    DBG("hangup: sending hangupAll");
+
+    request_id = mtk_radio_ext_hangup_all(
+        self->radio_ext, NULL, NULL, NULL);
+
+    DBG("hangup: request id %u", request_id);
+
+    if (!request_id) {
+        mtk_ims_call_result_request_unref(req);
+        return 0;
+    }
+
+    self->hangup_req = req;
+    self->hangup_radio_req_id = request_id;
+
+    return request_id;
 }
 
 static
@@ -519,6 +590,15 @@ mtk_ims_call_finalize(
     GObject* object)
 {
     MtkImsCall* self = THIS(object);
+
+    if (self->hangup_req) {
+        mtk_ims_call_complete_hangup(
+            self, BINDER_EXT_CALL_RESULT_ERROR);
+    } else if (self->hangup_radio_req_id) {
+        mtk_radio_ext_cancel(
+            self->radio_ext, self->hangup_radio_req_id);
+        self->hangup_radio_req_id = 0;
+    }
 
     mtk_radio_ext_unref(self->radio_ext);
     radio_client_unref(self->ims_aosp_client);
