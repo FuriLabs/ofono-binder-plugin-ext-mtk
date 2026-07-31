@@ -67,7 +67,7 @@ BASE_FLAGS = -fPIC -fvisibility=hidden
 TRIPLET = $(shell $(CC) -dumpmachine)
 BINDER_PLUGIN_INCLUDE_PATH = /usr/include/$(TRIPLET)/ofonobinderpluginext/
 FULL_CFLAGS = $(BASE_FLAGS) $(CFLAGS) $(DEFINES) $(WARNINGS) -MMD -MP \
-  $(shell pkg-config --cflags $(PKGS))-I$(BINDER_PLUGIN_INCLUDE_PATH)
+  $(shell pkg-config --cflags $(PKGS)) -I$(BINDER_PLUGIN_INCLUDE_PATH)
 FULL_LDFLAGS = $(BASE_FLAGS) $(LDFLAGS) -shared \
   $(shell pkg-config --libs $(LDPKGS))
 DEBUG_FLAGS = -g
