@@ -27,6 +27,7 @@
 #include <ofono/misc.h>
 
 #include <gbinder.h>
+#include <radio_types.h>
 
 #include <gutil_idlepool.h>
 #include <gutil_log.h>
@@ -102,6 +103,11 @@ typedef struct mtk_radio_ext_result_request {
     MtkRadioExtRequest base;
     MtkRadioExtResultFunc complete;
 } MtkRadioExtResultRequest;
+
+typedef struct mtk_radio_ext_sms_result_request {
+    MtkRadioExtRequest base;
+    MtkRadioExtSmsResultFunc complete;
+} MtkRadioExtSmsResultRequest;
 
 static GLogModule mtk_radio_ext_binder_log_module = {
     .max_level = GLOG_LEVEL_VERBOSE,
@@ -989,6 +995,41 @@ mtk_radio_ext_atci_indication(
 
 static
 void
+mtk_radio_ext_sms_result_response(
+    MtkRadioExtRequest* req,
+    const RadioResponseInfo* info,
+    const GBinderReader* args)
+{
+    MtkRadioExt* self = req->radio;
+    MtkRadioExtSmsResultRequest* sms_req = G_CAST(req,
+        MtkRadioExtSmsResultRequest, base);
+    guint msg_ref = 0;
+
+    if (args) {
+        GBinderReader reader;
+        const RadioSendSmsResult* res;
+
+        gbinder_reader_copy(&reader, args);
+        res = gbinder_reader_read_hidl_struct(&reader, RadioSendSmsResult);
+        if (res) {
+            /*
+             * The modem assigns the message reference, the network
+             * quotes it in the status report, and nothing else knows it.
+             */
+            msg_ref = res->messageRef;
+            DBG("ims sms msg ref: %u, err: %d", msg_ref, res->errorCode);
+        } else {
+            ofono_warn("Could not read the message reference of the sent SMS");
+        }
+    }
+
+    if (sms_req->complete) {
+        sms_req->complete(self, info->error, msg_ref, req->user_data);
+    }
+}
+
+static
+void
 mtk_radio_ext_result_response(
     MtkRadioExtRequest* req,
     const RadioResponseInfo* info,
@@ -1046,6 +1087,24 @@ mtk_radio_ext_request_alloc(
     req->destroy = destroy;
     req->user_data = user_data;
     g_hash_table_insert(self->requests, KEY(req->id), req);
+    return req;
+}
+
+static
+MtkRadioExtSmsResultRequest*
+mtk_radio_ext_sms_result_request_new(
+    MtkRadioExt* self,
+    gint32 resp,
+    MtkRadioExtSmsResultFunc complete,
+    GDestroyNotify destroy,
+    void* user_data)
+{
+    MtkRadioExtSmsResultRequest* req =
+        (MtkRadioExtSmsResultRequest*)mtk_radio_ext_request_alloc(self, resp,
+            mtk_radio_ext_sms_result_response, destroy, user_data,
+            sizeof(MtkRadioExtSmsResultRequest));
+
+    req->complete = complete;
     return req;
 }
 
@@ -1596,7 +1655,7 @@ mtk_radio_ext_send_ims_sms_ex(
     const char* smsc,
     const void* pdu,
     gsize pdu_len,
-    MtkRadioExtResultFunc complete,
+    MtkRadioExtSmsResultFunc complete,
     GDestroyNotify destroy,
     void* user_data)
 {
@@ -1606,8 +1665,8 @@ mtk_radio_ext_send_ims_sms_ex(
         GBinderClient* client = self->client;
         GBinderLocalRequest* args = gbinder_client_new_request2(client, code);
         GBinderWriter writer;
-        MtkRadioExtResultRequest* req =
-            mtk_radio_ext_result_request_new(self, resp_code,
+        MtkRadioExtSmsResultRequest* req =
+            mtk_radio_ext_sms_result_request_new(self, resp_code,
                 complete, destroy, user_data);
         const guint req_id = req->base.id;
 

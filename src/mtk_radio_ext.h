@@ -23,6 +23,12 @@
 typedef struct mtk_radio_ext MtkRadioExt;
 typedef enum call_info_msg_type CallInfoMsgType;
 
+typedef void (*MtkRadioExtSmsResultFunc)(
+    MtkRadioExt* radio,
+    int result,
+    guint msg_ref,
+    void* user_data);
+
 typedef void (*MtkRadioExtResultFunc)(
     MtkRadioExt* radio,
     int result,
@@ -133,7 +139,7 @@ mtk_radio_ext_send_ims_sms_ex(
     const char* smsc,
     const void* pdu,
     gsize pdu_len,
-    MtkRadioExtResultFunc complete,
+    MtkRadioExtSmsResultFunc complete,
     GDestroyNotify destroy,
     void* user_data);
 
