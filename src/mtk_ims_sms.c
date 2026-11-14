@@ -137,6 +137,7 @@ void
 mtk_ims_sms_result_callback(
     MtkRadioExt* radio,
     int result,
+    guint msg_ref,
     void* user_data)
 {
     MtkImsSmsResultRequest* req = user_data;
@@ -149,7 +150,8 @@ mtk_ims_sms_result_callback(
     }
 
     if (req->complete) {
-        req->complete(BINDER_EXT_SMS(req->self), send_result, 0, req->user_data);
+        req->complete(BINDER_EXT_SMS(req->self), send_result, msg_ref,
+            req->user_data);
     }
 }
 
